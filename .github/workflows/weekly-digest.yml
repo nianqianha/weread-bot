@@ -1,0 +1,39 @@
+name: Weekly Reading Digest
+
+on:
+  # UTC 01:00 Mondays = Beijing 09:00 Mondays
+  schedule:
+    - cron: '0 1 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install apprise
+        run: |
+          python -m pip install --upgrade pip
+          pip install apprise
+
+      - name: Aggregate the week and send one email
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: 'auto-reading.yml'
+          DAYS: '7'
+          APPRISE_URL: ${{ secrets.APPRISE_URL }}
+          TZ: 'Asia/Shanghai'
+        run: python .github/scripts/weekly_digest.py
