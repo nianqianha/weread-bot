@@ -19,9 +19,11 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import send_mail  # noqa: E402
+
 REPO = os.environ.get("REPO", "")
 WORKFLOW = os.environ.get("WORKFLOW", "auto-reading.yml")
-APPRISE_URL = os.environ.get("APPRISE_URL", "").strip()
 DAYS = int(os.environ.get("DAYS", "7"))
 SEND_TEST = os.environ.get("SEND_TEST", "").strip().lower() in ("1", "true", "yes")
 
@@ -133,22 +135,29 @@ def build_report():
 
 
 def send_email(subject, body):
-    try:
-        import apprise
-    except ImportError:
-        log("apprise is not installed")
-        return 1
+    """Hand the message to send_mail.py, which owns the SMTP conversation."""
+    body_file = os.path.join(tempfile.gettempdir(), "weread-digest-body.txt")
+    with open(body_file, "w", encoding="utf-8") as handle:
+        handle.write(body)
 
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "send_mail.py")
+    env = dict(os.environ)
+    env.setdefault("MAIL_CONFIG", "")
+    proc = subprocess.run(
+        [sys.executable, script, subject, body_file],
+        capture_output=True,
+        timeout=180,
+        env=env,
+    )
+    out = proc.stdout.decode("utf-8", "replace").strip()
+    err = proc.stderr.decode("utf-8", "replace").strip()
+    for line in (out or err).splitlines():
+        log(line)
     try:
-        notifier = apprise.Apprise()
-        if not notifier.add(APPRISE_URL):
-            log("APPRISE_URL was rejected by apprise")
-            return 1
-        notifier.notify(title=subject, body=body)
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        log(f"email send failed: {type(exc).__name__}: {exc}")
-        return 1
+        os.remove(body_file)
+    except OSError:
+        pass
+    return proc.returncode
 
 
 def main():
@@ -158,13 +167,11 @@ def main():
 
     if SEND_TEST:
         log("send_test requested, sending a test email instead of the digest")
-        if not APPRISE_URL:
-            log("APPRISE_URL not set")
-            return 1
         code = send_email(
             "微信读书周报 - 测试邮件",
-            "这是一封测试邮件，用于确认 SMTP 通道配置正确。\n\n"
-            f"仓库：{REPO}\n发送时间：{datetime.datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z}\n\n"
+            "这是一封测试邮件，用于确认 SMTP 配置是否正确。\n\n"
+            f"仓库：{REPO}\n"
+            f"发送时间：{datetime.datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z}\n\n"
             "收到这封邮件说明每周汇总可以正常投递。",
         )
         log("test email sent" if code == 0 else "test email failed")
@@ -185,8 +192,8 @@ def main():
         log("no scheduled runs in the window, skipping email")
         return 0
 
-    if not APPRISE_URL:
-        log("APPRISE_URL not set, skipping email (set the secret to enable)")
+    if not os.environ.get("MAIL_CONFIG", "").strip():
+        log("MAIL_CONFIG not set, skipping email (set the secret to enable)")
         return 0
 
     code = send_email("微信读书周报", report)
