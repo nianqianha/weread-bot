@@ -205,6 +205,21 @@ jobs:
         # 运行阅读机器人
         python weread-bot.py --config config.yaml
 
+    - name: Notify by email on failure
+      if: failure()
+      env:
+        MAIL_CONFIG: ${{ secrets.MAIL_CONFIG }}
+      run: |
+        {
+          echo "微信读书自动阅读任务失败。"
+          echo ""
+          echo "仓库: ${{ github.repository }}"
+          echo "运行记录: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "任务状态: ${{ job.status }}"
+          echo ""
+          echo "最常见原因是登录凭据过期，请重新抓取 curl 并更新 WEREAD_CURL_STRING。"
+        } | python .github/scripts/send_mail.py "微信读书自动阅读失败" -
+
     - name: Upload runtime artifacts
       if: always()
       uses: actions/upload-artifact@v4
