@@ -23,6 +23,7 @@ REPO = os.environ.get("REPO", "")
 WORKFLOW = os.environ.get("WORKFLOW", "auto-reading.yml")
 APPRISE_URL = os.environ.get("APPRISE_URL", "").strip()
 DAYS = int(os.environ.get("DAYS", "7"))
+SEND_TEST = os.environ.get("SEND_TEST", "").strip().lower() in ("1", "true", "yes")
 
 FAILURE_CONCLUSIONS = {
     "failure",
@@ -131,10 +132,43 @@ def build_report():
     return "\n".join(lines), len(runs), ok, len(failed_rows), total_seconds
 
 
+def send_email(subject, body):
+    try:
+        import apprise
+    except ImportError:
+        log("apprise is not installed")
+        return 1
+
+    try:
+        notifier = apprise.Apprise()
+        if not notifier.add(APPRISE_URL):
+            log("APPRISE_URL was rejected by apprise")
+            return 1
+        notifier.notify(title=subject, body=body)
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        log(f"email send failed: {type(exc).__name__}: {exc}")
+        return 1
+
+
 def main():
     if not REPO:
         log("REPO is not set")
         return 1
+
+    if SEND_TEST:
+        log("send_test requested, sending a test email instead of the digest")
+        if not APPRISE_URL:
+            log("APPRISE_URL not set")
+            return 1
+        code = send_email(
+            "微信读书周报 - 测试邮件",
+            "这是一封测试邮件，用于确认 SMTP 通道配置正确。\n\n"
+            f"仓库：{REPO}\n发送时间：{datetime.datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z}\n\n"
+            "收到这封邮件说明每周汇总可以正常投递。",
+        )
+        log("test email sent" if code == 0 else "test email failed")
+        return code
 
     try:
         report, total, ok, failed, seconds = build_report()
@@ -155,24 +189,9 @@ def main():
         log("APPRISE_URL not set, skipping email (set the secret to enable)")
         return 0
 
-    try:
-        import apprise
-    except ImportError:
-        log("apprise is not installed")
-        return 1
-
-    try:
-        notifier = apprise.Apprise()
-        if not notifier.add(APPRISE_URL):
-            log("APPRISE_URL was rejected by apprise")
-            return 1
-        notifier.notify(title="微信读书周报", body=report)
-        log("weekly digest email sent")
-    except Exception as exc:  # noqa: BLE001
-        log(f"email send failed: {type(exc).__name__}: {exc}")
-        return 1
-
-    return 0
+    code = send_email("微信读书周报", report)
+    log("weekly digest email sent" if code == 0 else "weekly digest email failed")
+    return code
 
 
 if __name__ == "__main__":
