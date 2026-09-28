@@ -1,11 +1,12 @@
-ame: Auto Reading Bot
+name: Auto Reading Bot
 
 on:
   # Scheduled daily run at 22:00 Beijing time
   schedule:
     - cron: '0 14 * * *'   # UTC 14:00 = Beijing 22:00
   
-  # 鎷夊彇璇锋眰瑙﹀彂锛岀敤浜庢祴璇曢槄璇?  pull_request:
+  # 拉取请求触发，用于测试阅读
+  pull_request:
     branches: [ main ]
     paths:
       - 'weread-bot.py'
@@ -13,16 +14,16 @@ on:
       - '.github/workflows/auto-reading.yml'
       - '.github/workflows/ci.yml'
 
-  # 鎵嬪姩瑙﹀彂
+  # 手动触发
   workflow_dispatch:
     inputs:
       target_duration:
-        description: '闃呰鏃堕暱锛堝垎閽燂紝鏍煎紡锛?0-20銆傜暀绌烘椂浼樺厛浣跨敤浠撳簱 Secret TARGET_DURATION锛屽惁鍒欓粯璁?1-2锛?
+        description: '阅读时长（分钟，格式：10-20。留空时优先使用仓库 Secret TARGET_DURATION，否则默认 1-2）'
         required: false
         default: ''
         type: string
       reading_mode:
-        description: '闃呰妯″紡'
+        description: '阅读模式'
         required: false
         default: 'smart_random'
         type: choice
@@ -31,22 +32,22 @@ on:
         - sequential
         - pure_random
       notify_enabled:
-        description: '鍚敤閫氱煡'
+        description: '启用通知'
         required: false
         default: true
         type: boolean
       notify_only_on_failure:
-        description: '浠呭け璐ユ椂鍙戦€侀€氱煡'
+        description: '仅失败时发送通知'
         required: false
         default: false
         type: boolean
       history_enabled:
-        description: '鍚敤鎵ц鍘嗗彶鎸佷箙鍖?
+        description: '启用执行历史持久化'
         required: false
         default: true
         type: boolean
       history_max_entries:
-        description: '鎵ц鍘嗗彶鏈€澶氫繚鐣欏灏戞潯'
+        description: '执行历史最多保留多少条'
         required: false
         default: '50'
         type: string
@@ -54,7 +55,7 @@ on:
 jobs:
   auto-reading:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 2灏忔椂瓒呮椂
+    timeout-minutes: 120  # 2小时超时
     
     steps:
     - name: Checkout code
@@ -97,7 +98,7 @@ jobs:
 
         reading:
           mode: "${{ github.event.inputs.reading_mode || 'smart_random' }}"
-          # 鐩爣闃呰鏃堕暱锛堝垎閽燂級锛屾敮鎸佸尯闂撮殢鏈猴紝鏍煎紡濡傦細"1" 鎴?"1-2"
+          # 目标阅读时长（分钟），支持区间随机，格式如："1" 或 "1-2"
           target_duration: "${TARGET_DURATION}"
           reading_interval: "30-48"
           use_curl_data_first: true
@@ -151,15 +152,15 @@ jobs:
 
     - name: Run WeRead Bot
       env:
-        # Cookie鍒锋柊QL灞炴€э紝鏍规嵁涓嶅悓鐢ㄦ埛鐨勭幆澧冿紝鍙兘闇€瑕佽缃负True鎴朏alse鏉ョ‘淇漜ookie鍒锋柊姝ｅ父宸ヤ綔锛岄粯璁ゅ€间负false
+        # Cookie刷新QL属性，根据不同用户的环境，可能需要设置为True或False来确保cookie刷新正常工作，默认值为false
         HACK_COOKIE_REFRESH_QL: ${{ secrets.HACK_COOKIE_REFRESH_QL }}
-        # 澶氱敤鎴?cURL锛氬湪 WEREAD_CURL_STRING 涓斁缃娈?curl锛屾涓庢涔嬮棿鑷冲皯鎻掑叆涓や釜绌鸿
+        # 多用户 cURL：在 WEREAD_CURL_STRING 中放置多段 curl，段与段之间至少插入两个空行
         WEREAD_CURL_STRING: ${{ secrets.WEREAD_CURL_STRING }}
-        # 澶氱敤鎴峰苟鍙戞帶鍒讹紝鏈缃粯璁?1锛堥『搴忔墽琛岋級
+        # 多用户并发控制，未设置默认 1（顺序执行）
         MAX_CONCURRENT_USERS: ${{ secrets.MAX_CONCURRENT_USERS || 1 }}
-        # 鍗曠敤鎴疯繛缁槄璇诲け璐ヤ笂闄愶紝鏈缃椂榛樿 5
+        # 单用户连续阅读失败上限，未设置时默认 5
         MAX_CONSECUTIVE_FAILURES: ${{ secrets.MAX_CONSECUTIVE_FAILURES || 5 }}
-        # 閫氱煡鐩稿叧鐜鍙橀噺
+        # 通知相关环境变量
         PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -181,7 +182,7 @@ jobs:
         GOTIFY_TOKEN: ${{ secrets.GOTIFY_TOKEN }}
         GOTIFY_PRIORITY: ${{ secrets.GOTIFY_PRIORITY }}
         GOTIFY_TITLE: ${{ secrets.GOTIFY_TITLE }}
-        # 浠ｇ悊璁剧疆锛堝彲閫夛級
+        # 代理设置（可选）
         HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
         HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
         SERVERCHAN3_UID: ${{ secrets.SERVERCHAN3_UID }}
@@ -195,21 +196,22 @@ jobs:
         HISTORY_FILE: ${{ secrets.HISTORY_FILE || 'logs/run-history.json' }}
         HISTORY_MAX_ENTRIES: ${{ secrets.HISTORY_MAX_ENTRIES || github.event.inputs.history_max_entries || '50' }}
         HISTORY_PERSIST_RUNTIME_ERROR: ${{ secrets.HISTORY_PERSIST_RUNTIME_ERROR || 'true' }}
-        # 鍏朵粬鐜鍙橀噺
+        # 其他环境变量
         TZ: 'Asia/Shanghai'
       run: |
-        echo "寮€濮嬭嚜鍔ㄩ槄璇讳换鍔?.."
-        echo "褰撳墠鏃堕棿: $(date)"
-        echo "杩愯鍙傛暟:"
-        echo "- 闃呰鏃堕暱: ${TARGET_DURATION}"
-        echo "- 闃呰妯″紡: ${{ github.event.inputs.reading_mode || 'smart_random' }}"
-        echo "- 鍚敤閫氱煡: ${{ github.event.inputs.notify_enabled != 'false' }}"
-        echo "- 浠呭け璐ラ€氱煡: ${{ github.event.inputs.notify_only_on_failure == 'true' }}"
-        echo "- 鍘嗗彶鎸佷箙鍖? ${{ github.event.inputs.history_enabled != 'false' }}"
-        echo "- 鍘嗗彶淇濈暀鏉℃暟: ${{ github.event.inputs.history_max_entries || '50' }}"
+        echo "开始自动阅读任务..."
+        echo "当前时间: $(date)"
+        echo "运行参数:"
+        echo "- 阅读时长: ${TARGET_DURATION}"
+        echo "- 阅读模式: ${{ github.event.inputs.reading_mode || 'smart_random' }}"
+        echo "- 启用通知: ${{ github.event.inputs.notify_enabled != 'false' }}"
+        echo "- 仅失败通知: ${{ github.event.inputs.notify_only_on_failure == 'true' }}"
+        echo "- 历史持久化: ${{ github.event.inputs.history_enabled != 'false' }}"
+        echo "- 历史保留条数: ${{ github.event.inputs.history_max_entries || '50' }}"
         echo "================================"
         
-        # 杩愯闃呰鏈哄櫒浜?        python weread-bot.py --config config.yaml
+        # 运行阅读机器人
+        python weread-bot.py --config config.yaml
 
     - name: Upload runtime artifacts
       if: always()
