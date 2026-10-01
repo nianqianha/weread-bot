@@ -1,12 +1,15 @@
 name: Auto Reading Bot
 
 on:
-  # Primary run 10:00 Beijing; 21:00 Beijing is a retry that no-ops if the
-  # morning run already succeeded (see the "Check whether today already
-  # succeeded" step). GitHub cron is always UTC.
+  # Three slots a day, but only the first one that is actually due reads:
+  # the "Decide whether this slot should read" step skips the rest until 20
+  # hours have passed since the last successful scheduled run. More slots
+  # means the daily hour lands sooner and is less likely to be missed at all.
+  # GitHub cron is always UTC.
   schedule:
-    - cron: '0 2 * * *'    # UTC 02:00 = Beijing 10:00 (primary)
-    - cron: '0 13 * * *'   # UTC 13:00 = Beijing 21:00 (retry if needed)
+    - cron: '0 6 * * *'    # UTC 06:00 = Beijing 14:00
+    - cron: '0 14 * * *'   # UTC 14:00 = Beijing 22:00
+    - cron: '0 22 * * *'   # UTC 22:00 = Beijing 06:00 next day
   
 
   # 手动触发
@@ -145,41 +148,51 @@ jobs:
     - name: Create logs directory
       run: mkdir -p logs
 
-    - name: Check whether today already succeeded
+    - name: Decide whether this slot should read
       id: guard
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         REPO: ${{ github.repository }}
         WORKFLOW: 'auto-reading.yml'
         EVENT_NAME: ${{ github.event_name }}
+        MIN_HOURS: '20'
       run: |
-        # The evening cron exists only to retry a failed morning run, so a
-        # schedule event that already has a successful run today must no-op.
-        # Manual dispatch always runs: the user asking for it outranks the guard.
+        # The goal is one hour of credited reading per day, so a scheduled slot
+        # runs only when the last successful SCHEDULED run is at least
+        # MIN_HOURS old. Age-based on purpose: it needs no date or timezone
+        # maths, so a late fire -- or one that crosses midnight -- can never
+        # suppress a day it does not actually belong to.
         if [ "$EVENT_NAME" != "schedule" ]; then
-          echo "already_ok=false" >> "$GITHUB_OUTPUT"
-          echo "manual dispatch ($EVENT_NAME): guard bypassed, running unconditionally"
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "manual dispatch ($EVENT_NAME): always runs, not counted against the daily budget"
           exit 0
         fi
-        start=$(TZ=Asia/Shanghai date -u -d 'today 00:00' +%Y-%m-%dT%H:%M:%SZ)
-        n=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?event=schedule&per_page=100" \
-              --jq "[.workflow_runs[] | select(.conclusion==\"success\") | .created_at] | map(select(. >= \"$start\")) | length" \
-              2>/dev/null) || n=""
-        if [ -z "$n" ]; then
-          echo "could not read run history, failing open and running anyway"
-          n=0
+        last=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?event=schedule&per_page=100" \
+                 --jq '[.workflow_runs[] | select(.conclusion=="success") | .created_at] | max // ""' \
+                 2>/dev/null) || last=""
+        if [ -z "$last" ]; then
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "no successful schedule run on record, running this slot"
+          exit 0
         fi
-        echo "successful schedule runs since $start (Beijing today): $n"
-        if [ "$n" -gt 0 ]; then
-          echo "already_ok=true" >> "$GITHUB_OUTPUT"
-          echo "today already succeeded, skipping this retry"
+        now=$(date -u +%s)
+        then_s=$(date -u -d "$last" +%s) || then_s=""
+        if [ -z "$then_s" ]; then
+          echo "could not parse '$last' as a timestamp, failing open and running"
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        hours=$(( (now - then_s) / 3600 ))
+        echo "last successful schedule run: $last (${hours}h ago)"
+        if [ "$hours" -ge "$MIN_HOURS" ]; then
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "${hours}h >= ${MIN_HOURS}h, running this slot"
         else
-          echo "already_ok=false" >> "$GITHUB_OUTPUT"
-          echo "no successful schedule run yet today, proceeding"
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+          echo "${hours}h < ${MIN_HOURS}h, skipping: today's reading is already accounted for"
         fi
-
     - name: Run WeRead Bot
-      if: "${{ github.event_name != 'schedule' || steps.guard.outputs.already_ok != 'true' }}"
+      if: "${{ github.event_name != 'schedule' || steps.guard.outputs.should_run != 'true' }}"
       env:
         # Cookie刷新QL属性，根据不同用户的环境，可能需要设置为True或False来确保cookie刷新正常工作，默认值为false
         HACK_COOKIE_REFRESH_QL: ${{ secrets.HACK_COOKIE_REFRESH_QL }}
