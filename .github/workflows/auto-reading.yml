@@ -189,15 +189,21 @@ jobs:
         fi
         hours=$(( (now - then_s) / 3600 ))
         echo "last successful schedule run: $last (${hours}h ago)"
-        if [ "$hours" -ge "$MIN_HOURS" ]; then
+        # NOTE: outputs.should_run==true means GO. The gating step must compare
           echo "should_run=true" >> "$GITHUB_OUTPUT"
           echo "${hours}h >= ${MIN_HOURS}h, running this slot"
         else
           echo "should_run=false" >> "$GITHUB_OUTPUT"
           echo "${hours}h < ${MIN_HOURS}h, skipping: today's reading is already accounted for"
         fi
+      # gate truth table (guard output -> does the bot run?):
+      #   manual dispatch          -> always runs  (event_name != schedule)
+      #   schedule, should_run=true  -> runs
+      #   schedule, should_run=false -> skipped
+      # The comparison MUST be == 'true'; using != silently inverts it and
+      # the bot then only ever runs on the slots the guard told it to skip.
     - name: Run WeRead Bot
-      if: "${{ github.event_name != 'schedule' || steps.guard.outputs.should_run != 'true' }}"
+      if: "${{ github.event_name != 'schedule' || steps.guard.outputs.should_run == 'true' }}"
       env:
         # Cookie刷新QL属性，根据不同用户的环境，可能需要设置为True或False来确保cookie刷新正常工作，默认值为false
         HACK_COOKIE_REFRESH_QL: ${{ secrets.HACK_COOKIE_REFRESH_QL }}
