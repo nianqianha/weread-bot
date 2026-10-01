@@ -1,0 +1,44 @@
+name: Reading Watchdog
+
+# Independent of the reading workflow on purpose: separate file, separate job,
+# separate schedule. A bug in auto-reading.yml must not be able to silence this.
+on:
+  # hourly, off the hour to avoid the top-of-hour scheduling crowd
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Print the verdict instead of emailing (dry run)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check whether reading time actually accumulated
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: 'auto-reading.yml'
+          CHECK_WINDOW_HOURS: '26'
+          MIN_READING_SECONDS: '3000'
+          MAX_RUNS_TO_INSPECT: '6'
+          TEST_MODE: ${{ inputs.test_mode }}
+          MAIL_CONFIG: ${{ secrets.MAIL_CONFIG }}
+        run: python .github/scripts/watchdog.py
