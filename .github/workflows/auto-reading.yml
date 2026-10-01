@@ -3,13 +3,18 @@ name: Auto Reading Bot
 on:
   # Three slots a day, but only the first one that is actually due reads:
   # the "Decide whether this slot should read" step skips the rest until 20
-  # hours have passed since the last successful scheduled run. More slots
-  # means the daily hour lands sooner and is less likely to be missed at all.
-  # GitHub cron is always UTC.
+  # hours have passed since the last successful scheduled run.
+  #
+  # The odd minutes are deliberate. Observed GitHub scheduler delay over
+  # 09-28..10-01 was 6h14m on the morning slot and 5h20m on the evening one,
+  # so ~5h47m on average. The cron values are the desired fire time minus that
+  # average, which should put the runs at roughly 10:00 / 16:00 / 22:00 Beijing.
+  # Re-measure from the weekly digest email ("average delay") and nudge these
+  # if it drifts. GitHub cron is always UTC.
   schedule:
-    - cron: '0 6 * * *'    # UTC 06:00 = Beijing 14:00
-    - cron: '0 14 * * *'   # UTC 14:00 = Beijing 22:00
-    - cron: '0 22 * * *'   # UTC 22:00 = Beijing 06:00 next day
+    - cron: '13 2 * * *'   # UTC 02:13 -> ~10:00 Beijing
+    - cron: '13 8 * * *'   # UTC 08:13 -> ~16:00 Beijing
+    - cron: '13 20 * * *'  # UTC 20:13 -> ~22:00 Beijing
   
 
   # 手动触发
@@ -53,7 +58,7 @@ on:
 jobs:
   auto-reading:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 2小时超时
+    timeout-minutes: 150  # 2小时超时
     
     steps:
     - name: Checkout code
