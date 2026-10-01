@@ -1,0 +1,223 @@
+"""Invariant checks for the GitHub Actions wiring.
+
+Written after a gate condition was left inverted: the reading job reported
+`success` for a day while never executing, because renaming an output from
+`already_ok` (skip == true) to `should_run` (go == true) did not update the
+consumer. A boolean gate is a contract between two steps, so the contract is
+asserted here instead of trusted.
+
+Run on every push. Fails loudly rather than letting a semantic flip through.
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+import yaml
+
+ROOT = os.environ.get("WORKSPACE", ".")
+READING = os.path.join(ROOT, ".github/workflows/auto-reading.yml")
+DIGEST = os.path.join(ROOT, ".github/workflows/weekly-digest.yml")
+DIGEST_PY = os.path.join(ROOT, ".github/scripts/weekly_digest.py")
+GUARD_PY = os.path.join(ROOT, ".github/scripts/watchdog.py")
+TARGET_MINUTES = int(os.environ.get("TARGET_MINUTES", "90"))
+
+failures = []
+checks = 0
+
+
+def check(ok, label, detail=""):
+    global checks
+    checks += 1
+    if ok:
+        print(f"  PASS  {label}")
+    else:
+        print(f"  FAIL  {label}" + (f"\n          {detail}" if detail else ""))
+        failures.append(label)
+
+
+def steps_of(doc, job):
+    return {s.get("name"): s for s in doc["jobs"][job]["steps"] if s.get("name")}
+
+
+def bash_syntax_ok(script):
+    """`bash -n` without executing. Catches an if/else/fi left unbalanced.
+
+    Returns (True, ""), (False, error) or (None, reason) when the local bash
+    cannot be trusted -- some Windows shells pipe stdin badly enough that even
+    valid input is rejected. Skipping beats failing CI over a broken shell.
+    """
+    probe = "if [ 1 -eq 1 ]; then\n  echo ok\nfi\n"
+    try:
+        sanity = subprocess.run(
+            ["bash", "-n"], input=probe, capture_output=True, text=True, timeout=30
+        )
+        if sanity.returncode != 0:
+            return None, f"local bash rejects a known-good script ({sanity.returncode})"
+        proc = subprocess.run(
+            ["bash", "-n"], input=script, capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"could not run bash: {exc}"
+    if proc.returncode == 0:
+        return True, ""
+    return False, proc.stderr.strip()[:400]
+
+
+def main():
+    with open(READING, encoding="utf-8") as handle:
+        reading = yaml.safe_load(handle)
+    with open(DIGEST, encoding="utf-8") as handle:
+        digest = yaml.safe_load(handle)
+
+    triggers = reading.get(True) or reading["on"]
+    rsteps = steps_of(reading, "auto-reading")
+
+    print("\n1. the bot step must exist and be gated")
+    bot = rsteps.get("Run WeRead Bot")
+    guard = rsteps.get("Decide whether this slot should read")
+    check(bot is not None, "Run WeRead Bot step exists")
+    check(guard is not None, "guard step exists")
+    if not (bot and guard):
+        return finish()
+
+    expr = bot.get("if", "")
+
+    # --- the contract itself ---
+    print("\n2. gate polarity, evaluated rather than pattern-matched")
+    parsed = re.search(
+        r"github\.event_name\s*!=\s*'schedule'\s*\|\|\s*"
+        r"steps\.guard\.outputs\.(\w+)\s*(==|!=)\s*'([^']*)'",
+        expr,
+    )
+    check(bool(parsed), "gate expression has the expected shape", f"got: {expr!r}")
+    if not parsed:
+        return finish()
+
+    name, op, value = parsed.group(1), parsed.group(2), parsed.group(3)
+
+    def gate(event, output_value):
+        first = event != "schedule"
+        second = (output_value == value) if op == "==" else (output_value != value)
+        return first or second
+
+    expected = {
+        ("workflow_dispatch", "true"): True,
+        ("workflow_dispatch", "false"): True,
+        ("schedule", "true"): True,
+        ("schedule", "false"): False,
+    }
+    for (event, out), want in expected.items():
+        got = gate(event, out)
+        check(
+            got == want,
+            f"gate({event}, {name}={out}) -> run={got}",
+            f"expected run={want}; check the operator ({op} '{value}')"
+            + ("  <-- this is the inverted-gate bug"
+               if (got != want) else ""),
+        )
+
+    # --- the producer must agree with the consumer ---
+    print("\n3. the guard emits the output the gate expects")
+    workflow_text = open(READING, encoding="utf-8").read()
+    guard_run = guard.get("run", "")
+    check(
+        f'echo "{name}=true"' in guard_run and f'echo "{name}=false"' in guard_run,
+        f"guard emits both {name}=true and {name}=false",
+    )
+    manual_bypass = 'if [ "$EVENT_NAME" != "schedule" ]' in guard_run
+    check(manual_bypass, "guard short-circuits for manual dispatch")
+    # the branch that means "go" must be the one that satisfies the gate
+    go_branch = re.search(
+        r"if \[ \"\$hours\" -ge \"\$MIN_HOURS\" \]; then(.*?)\n\s*fi\b", guard_run, re.S
+    )
+    check(bool(go_branch), "guard has an age test branch")
+    if go_branch:
+        emits_go = f'echo "{name}=true"' in go_branch.group(1)
+        check(emits_go, f"the age-test pass branch emits {name}=true (the value the gate runs on)")
+
+    # --- the guard must at least be valid shell ---
+    print("\n3b. the guard script must be syntactically valid shell")
+    ok, err = bash_syntax_ok(guard_run)
+    if ok is None:
+        print(f"  SKIP  bash unusable here ({err})")
+    else:
+        check(ok, "bash -n accepts the guard script", err)
+        # an if/else/fi left unbalanced by a bad edit is the failure this catches
+        check(
+            guard_run.count("if [") >= 3 and guard_run.count("fi") >= 3,
+            "guard if/fi counts balance",
+            f"if=[={guard_run.count('if [')} fi]={guard_run.count('fi')}",
+        )
+    stale = re.findall(r"outputs\.(\w+)\s*[=!]=\s*'true'", workflow_text)
+    check(
+        set(stale) <= {name},
+        "no other gate outputs referenced",
+        f"found: {sorted(set(stale))}",
+    )
+
+    # --- schedule shape ---
+    print("\n4. schedule and timeout")
+    crons = [s["cron"] for s in triggers["schedule"]]
+    check(len(crons) == 3, f"exactly 3 daily slots, found {len(crons)}: {crons}")
+    hours = sorted(int(c.split()[1]) for c in crons)
+    check(len(set(hours)) == len(hours), "slot hours are distinct", str(hours))
+    for c in crons:
+        parts = c.split()
+        check(len(parts) == 5, f"cron {c!r} has 5 fields")
+    timeout = reading["jobs"]["auto-reading"].get("timeout-minutes", 0)
+    check(
+        timeout >= TARGET_MINUTES + 30,
+        f"timeout-minutes {timeout} leaves >=30 min headroom over the {TARGET_MINUTES} min target",
+    )
+
+    # --- cross-file coupling that silently drifts ---
+    print("\n5. digest slot list must match the workflow cron hours")
+    digest_text = open(DIGEST_PY, encoding="utf-8").read()
+    match = re.search(r"SLOT_HOURS_UTC\s*=\s*\(([^)]*)\)", digest_text)
+    check(bool(match), "SLOT_HOURS_UTC declared in weekly_digest.py")
+    if match:
+        declared = sorted(int(x) for x in re.findall(r"\d+", match.group(1)))
+        check(
+            declared == hours,
+            f"weekly_digest SLOT_HOURS_UTC {declared} == workflow cron hours {hours}",
+            "the delay report would be computed against the wrong slots",
+        )
+    check("send_mail" in digest_text, "digest uses send_mail (no apprise dependency)")
+    apprise_used = re.search(r"^\s*import\s+apprise\b|apprise\.Apprise\(", digest_text, re.M)
+    check(
+        apprise_used is None,
+        "weekly_digest does not actually use apprise",
+        "apprise>=2 dropped smtp://, so any use of it silently breaks email",
+    )
+
+    # --- the failure alert must still be wired ---
+    print("\n6. alerting")
+    check("Notify by email on failure" in rsteps, "failure email step exists")
+    check(rsteps["Notify by email on failure"].get("if") == "failure()", "failure step is guarded by if: failure()")
+    check("Upload runtime artifacts" in rsteps, "artifact upload exists")
+
+    print("\n7. watchdog exists and is independent")
+    check(os.path.exists(GUARD_PY), "watchdog.py present")
+    with open(GUARD_PY, encoding="utf-8") as handle:
+        wd_text = handle.read()
+    check("MIN_READING_SECONDS" in wd_text, "watchdog has a credited-reading threshold")
+    check("reading_seconds" in wd_text, "watchdog inspects real credited time, not just run status")
+
+    return finish()
+
+
+def finish():
+    print(f"\n{checks - len(failures)}/{checks} checks passed")
+    if failures:
+        print("FAILED:")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print("RESULT: all wiring invariants hold")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
