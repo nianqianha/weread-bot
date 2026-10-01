@@ -36,7 +36,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           WORKFLOW: 'auto-reading.yml'
-          CHECK_WINDOW_HOURS: '26'
+          # 28h, not 24h and not 36h. Derivation lives in
+          # .github/scripts/derive_window.py and is asserted by verify_config.py:
+          # at 2h of per-slot jitter the widest healthy gap is 25.97h, so 26h
+          # left under two minutes of headroom and would false-alarm on a bad
+          # day at GitHub. 28h keeps ~2h of margin; the cost is only that a
+          # fully silent failure is noticed 2h later.
+          CHECK_WINDOW_HOURS: '28'
           MIN_READING_SECONDS: '3000'
           MAX_RUNS_TO_INSPECT: '6'
           TEST_MODE: ${{ inputs.test_mode }}
