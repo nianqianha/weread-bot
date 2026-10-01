@@ -27,6 +27,11 @@ WORKFLOW = os.environ.get("WORKFLOW", "auto-reading.yml")
 DAYS = int(os.environ.get("DAYS", "7"))
 SEND_TEST = os.environ.get("SEND_TEST", "").strip().lower() in ("1", "true", "yes")
 
+# UTC hours of the scheduled slots declared in auto-reading.yml, which are
+# Beijing 14:00 / 22:00 / 06:00 (next day). Used to report how late each run
+# actually fired, so a drifting GitHub scheduler is visible instead of silent.
+SLOT_HOURS_UTC = (6, 14, 22)
+
 FAILURE_CONCLUSIONS = {
     "failure",
     "cancelled",
@@ -86,6 +91,35 @@ def humanize(seconds):
     return f"{minutes} 分钟"
 
 
+BEIJING = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def schedule_delay_minutes(created_at):
+    """Minutes between the slot this run belongs to and when it actually fired."""
+    fired = datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    midnight = fired.replace(hour=0, minute=0, second=0, microsecond=0)
+    candidates = [midnight.replace(hour=h) for h in SLOT_HOURS_UTC if midnight.replace(hour=h) <= fired]
+    slot = max(candidates) if candidates else midnight - datetime.timedelta(days=1)
+    return int(round((fired - slot).total_seconds() / 60))
+
+
+def timing_lines(rows):
+    """rows: list of (beijing_dt, delay_minutes) for the successful runs."""
+    if not rows:
+        return ["", "触发时间：本周没有成功的运行。"]
+    rows = sorted(rows)
+    out = ["", "触发时间（北京时间 / 相对计划延迟）："]
+    for when, delay in rows:
+        out.append(f"  {when:%m-%d %H:%M}  +{delay} 分钟")
+    delays = [d for _, d in rows]
+    avg = int(round(sum(delays) / len(delays)))
+    worst = max(delays)
+    out.append(f"平均延迟 {avg} 分钟（{humanize(avg * 60)}），最大 {worst} 分钟")
+    if any(d >= 12 * 60 for _, d in rows):
+        out.append("注意：有运行延迟超过 12 小时，可能跨过午夜导致时长记到次日。")
+    return out
+
+
 def build_report():
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=DAYS)
     since_s = since.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -104,11 +138,16 @@ def build_report():
     total_seconds = 0
     ok = 0
     failed_rows = []
+    timings = []
     for run in runs:
         conclusion = run.get("conclusion")
         if conclusion == "success":
             ok += 1
             total_seconds += history_seconds(run["id"])
+            created = run.get("created_at", "")
+            if created:
+                fired = datetime.datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(BEIJING)
+                timings.append((fired, schedule_delay_minutes(created)))
         elif conclusion in FAILURE_CONCLUSIONS:
             failed_rows.append(
                 (run.get("created_at", "")[:16].replace("T", " "), conclusion)
@@ -125,8 +164,10 @@ def build_report():
         f"累计阅读时长：{humanize(total_seconds)}",
         "",
         f"仓库：{REPO}",
-        "计划：每天 22:00 跑一次，时长 55-65 分钟",
+        "计划：每天 3 个时间点（06:00 / 14:00 / 22:00 北京时间），",
+        "      距上次成功满 20 小时才读，故每天约一小时。",
     ]
+    lines += timing_lines(timings)
     if failed_rows:
         lines += ["", "失败记录："]
         lines += [f"  - {when} UTC  {conclusion}" for when, conclusion in failed_rows]
