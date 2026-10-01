@@ -27,10 +27,11 @@ WORKFLOW = os.environ.get("WORKFLOW", "auto-reading.yml")
 DAYS = int(os.environ.get("DAYS", "7"))
 SEND_TEST = os.environ.get("SEND_TEST", "").strip().lower() in ("1", "true", "yes")
 
-# UTC hours of the scheduled slots declared in auto-reading.yml, which are
-# Beijing 14:00 / 22:00 / 06:00 (next day). Used to report how late each run
-# actually fired, so a drifting GitHub scheduler is visible instead of silent.
-SLOT_HOURS_UTC = (6, 14, 22)
+# UTC hours of the scheduled slots declared in auto-reading.yml. Those cron
+# values are the desired Beijing fire times minus the measured GitHub scheduler
+# delay (~5h47m), so they land on roughly 10:00 / 16:00 / 22:00 Beijing.
+# Used to report how late each run actually fired.
+SLOT_HOURS_UTC = (2, 8, 20)
 
 FAILURE_CONCLUSIONS = {
     "failure",
@@ -164,8 +165,8 @@ def build_report():
         f"累计阅读时长：{humanize(total_seconds)}",
         "",
         f"仓库：{REPO}",
-        "计划：每天 3 个时间点（06:00 / 14:00 / 22:00 北京时间），",
-        "      距上次成功满 20 小时才读，故每天约一小时。",
+        "计划：每天 3 个时间点（10:00 / 16:00 / 22:00 北京时间），",
+        "      距上次成功满 20 小时才读，故每天约一次，目标 90 分钟。",
     ]
     lines += timing_lines(timings)
     if failed_rows:
