@@ -189,7 +189,8 @@ jobs:
         fi
         hours=$(( (now - then_s) / 3600 ))
         echo "last successful schedule run: $last (${hours}h ago)"
-        # NOTE: outputs.should_run==true means GO. The gating step must compare
+        # outputs.should_run==true means GO; the gate must compare against it with ==.
+        if [ "$hours" -ge "$MIN_HOURS" ]; then
           echo "should_run=true" >> "$GITHUB_OUTPUT"
           echo "${hours}h >= ${MIN_HOURS}h, running this slot"
         else
