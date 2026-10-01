@@ -1,0 +1,29 @@
+name: Verify Wiring
+
+# Runs the invariant checks on every push. This is the regression guard for
+# semantic flips in the workflow wiring -- the class of bug where one side of a
+# contract changes and the other silently keeps its old meaning.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Assert the Actions wiring invariants
+        env:
+          TARGET_MINUTES: '90'
+        run: python .github/scripts/verify_config.py
