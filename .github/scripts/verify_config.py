@@ -198,7 +198,52 @@ def main():
     check(rsteps["Notify by email on failure"].get("if") == "failure()", "failure step is guarded by if: failure()")
     check("Upload runtime artifacts" in rsteps, "artifact upload exists")
 
-    print("\n7. watchdog exists and is independent")
+    # --- the watchdog window must be consistent with the cron geometry ---
+    print("\n7. watchdog window is derived from the schedule, not guessed")
+    wd_wf_path = os.path.join(ROOT, ".github/workflows/watchdog.yml")
+    wd_path = os.path.join(ROOT, ".github/scripts/watchdog.py")
+    check(os.path.exists(wd_wf_path), "watchdog workflow present")
+    check(os.path.exists(wd_path), "watchdog script present")
+    if os.path.exists(wd_wf_path):
+        with open(wd_wf_path, encoding="utf-8") as handle:
+            wd_doc = yaml.safe_load(handle)
+        wd_steps = {
+            s.get("name"): s for s in wd_doc["jobs"]["watchdog"]["steps"] if s.get("name")
+        }
+        step = wd_steps.get("Check whether reading time actually accumulated")
+        check(step is not None, "watchdog inspection step exists")
+        if step:
+            raw = str(step.get("env", {}).get("CHECK_WINDOW_HOURS", ""))
+            check(raw.isdigit(), f"CHECK_WINDOW_HOURS is a plain number ({raw!r})")
+            window = int(raw) if raw.isdigit() else None
+
+            min_hours = int(str(guard.get("env", {}).get("MIN_HOURS", "20")))
+            check(min_hours == 20, f"guard MIN_HOURS is 20 (found {min_hours})")
+
+            derive = os.path.join(ROOT, ".github/scripts/derive_window.py")
+            check(os.path.exists(derive), "derive_window.py present")
+            if window and os.path.exists(derive):
+                sys.path.insert(0, os.path.dirname(derive))
+                import derive_window  # noqa: E402
+
+                stats = derive_window.analyze(min_hours=min_hours)
+                widest = stats["max_h"]
+                print(
+                    f"        widest normal gap at {stats['jitter_hours']}h jitter "
+                    f"= {widest:.1f}h, watchdog window = {window}h"
+                )
+                check(
+                    window > widest,
+                    f"watchdog window {window}h exceeds the widest normal gap {widest:.1f}h",
+                    "a healthy system would trigger a false alarm",
+                )
+                check(
+                    window <= 30,
+                    f"watchdog window {window}h is <= 30h",
+                    "a fully silent failure would go unnoticed for too long",
+                )
+
+    print("\n8. watchdog exists and is independent")
     check(os.path.exists(GUARD_PY), "watchdog.py present")
     with open(GUARD_PY, encoding="utf-8") as handle:
         wd_text = handle.read()
