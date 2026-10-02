@@ -218,6 +218,21 @@ def main():
                 "watchdog does not re-implement the artifact read",
                 "a private copy of this logic is how the two would drift apart",
             )
+            # a real 90-minute manual session banks real reading time; a
+            # schedule-only filter reported that window as a failure. Anchored on
+            # the filter expression itself: the display code in build_body also
+            # mentions workflow_dispatch, so a bare substring was satisfiable by
+            # presentation alone (self-test case J).
+            check(
+                'r.get("event") in ("schedule", "workflow_dispatch")' in wd_code,
+                "watchdog counts manual dispatches toward the daily goal",
+                "a 90-minute manual run must not read as a failed window",
+            )
+            check(
+                "定时运行最长" in wd_early_text and "手动运行最长" in wd_early_text,
+                "watchdog reports the two sources separately",
+                "otherwise the alert cannot tell the user which path delivered",
+            )
 
     # --- schedule shape ---
     print("\n4. schedule and timeout")
