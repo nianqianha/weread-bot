@@ -17,9 +17,9 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import last_credit  # noqa: E402
 import send_mail  # noqa: E402
 
 REPO = os.environ.get("REPO", "")
@@ -50,31 +50,12 @@ def gh(args, timeout=180):
 def reading_seconds(run_id):
     """Credited reading seconds recorded by this run, or 0 if it recorded none.
 
-    A guard-skip legitimately records nothing, so 0 is not itself an error --
-    it just means this run is not the one that produced the day's reading.
+    Delegates to last_credit so the guard and the watchdog can never disagree
+    about what counts as credited reading time. A guard-skip legitimately
+    records nothing, so 0 is not itself an error -- it just means this run is
+    not the one that produced the day's reading.
     """
-    workdir = tempfile.mkdtemp(prefix=f"wd-run-{run_id}-")
-    try:
-        gh(["run", "download", str(run_id), "-R", REPO, "-D", workdir])
-    except Exception as exc:  # noqa: BLE001
-        log(f"run {run_id}: artifact unavailable ({str(exc)[:80]})")
-        return 0
-
-    total = 0
-    try:
-        import glob
-
-        for path in glob.glob(os.path.join(workdir, "**", "run-history.json"), recursive=True):
-            with open(path, "r", encoding="utf-8") as handle:
-                records = json.load(handle)
-            total += sum(int(r.get("total_duration_seconds") or 0) for r in records)
-    except Exception as exc:  # noqa: BLE001
-        log(f"run {run_id}: could not read run-history.json ({exc})")
-    finally:
-        import shutil
-
-        shutil.rmtree(workdir, ignore_errors=True)
-    return total
+    return last_credit.credited_seconds(run_id)
 
 
 def inspect():
