@@ -195,14 +195,28 @@ def main():
             or "event') == 'schedule'" in helper_text,
             "helper ignores manual dispatches so tests cannot consume the budget",
         )
-        # the watchdog must reach the same verdict, so it must not re-implement it
+        # the watchdog must reach the same verdict, so it must not re-implement
+        # the measurement. Checking merely for the field name was too weak: a
+        # private copy of the whole read satisfies it while drifting.
         wd_early = os.path.join(ROOT, ".github/scripts/watchdog.py")
         if os.path.exists(wd_early):
             with open(wd_early, encoding="utf-8") as handle:
                 wd_early_text = handle.read()
+            wd_code = "\n".join(
+                ln for ln in wd_early_text.splitlines() if not ln.lstrip().startswith("#")
+            )
             check(
-                "total_duration_seconds" in wd_early_text,
-                "watchdog measures credited seconds the same way",
+                "import last_credit" in wd_code,
+                "watchdog imports the shared credit helper",
+            )
+            check(
+                "last_credit.credited_seconds(" in wd_code,
+                "watchdog measures credited seconds through the shared helper",
+            )
+            check(
+                "run-history.json" not in wd_code,
+                "watchdog does not re-implement the artifact read",
+                "a private copy of this logic is how the two would drift apart",
             )
 
     # --- schedule shape ---
