@@ -122,6 +122,13 @@ def main():
     print("\n3. the guard emits the output the gate expects")
     workflow_text = open(READING, encoding="utf-8").read()
     guard_run = guard.get("run", "")
+    # Wires are checked against code, never against prose. A comment that merely
+    # names a file must not be able to satisfy a wiring check: case G in the
+    # verifier self-test removes the real invocation and leaves the comment, and
+    # an earlier version of this check passed that broken state.
+    guard_code = "\n".join(
+        ln for ln in guard_run.splitlines() if not ln.lstrip().startswith("#")
+    )
     check(
         f'echo "{name}=true"' in guard_run and f'echo "{name}=false"' in guard_run,
         f"guard emits both {name}=true and {name}=false",
@@ -156,6 +163,47 @@ def main():
         "no other gate outputs referenced",
         f"found: {sorted(set(stale))}",
     )
+
+    # --- the guard must not trust a proxy that has already lied once ---
+    print("\n3a. the guard must read credited time, not the run conclusion")
+    helper = os.path.join(ROOT, ".github/scripts/last_credit.py")
+    check(os.path.exists(helper), "last_credit.py present")
+    check(
+        "python .github/scripts/last_credit.py" in guard_code,
+        "guard delegates the credit lookup to last_credit.py",
+        "the guard is deciding on its own again",
+    )
+    check(
+        'conclusion=="success"' not in guard_code and "conclusion == 'success'" not in guard_code,
+        "guard does not select runs by conclusion",
+        "conclusion==success lied during the inverted-gate incident",
+    )
+    check(
+        "if-no-files-found" not in guard_code,
+        "guard does not infer anything from artifact presence",
+    )
+    if os.path.exists(helper):
+        with open(helper, encoding="utf-8") as handle:
+            helper_text = handle.read()
+        # anchor on the read itself; the module docstring names the same field
+        check(
+            'record.get("total_duration_seconds")' in helper_text,
+            "helper reads total_duration_seconds from run-history.json",
+        )
+        check(
+            'event") == "schedule"' in helper_text
+            or "event') == 'schedule'" in helper_text,
+            "helper ignores manual dispatches so tests cannot consume the budget",
+        )
+        # the watchdog must reach the same verdict, so it must not re-implement it
+        wd_early = os.path.join(ROOT, ".github/scripts/watchdog.py")
+        if os.path.exists(wd_early):
+            with open(wd_early, encoding="utf-8") as handle:
+                wd_early_text = handle.read()
+            check(
+                "total_duration_seconds" in wd_early_text,
+                "watchdog measures credited seconds the same way",
+            )
 
     # --- schedule shape ---
     print("\n4. schedule and timeout")
