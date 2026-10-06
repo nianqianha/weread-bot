@@ -34,6 +34,11 @@ CHECK_WINDOW_HOURS = int(os.environ.get("CHECK_WINDOW_HOURS", "26"))
 # if the run claims success.
 MIN_READING_SECONDS = int(os.environ.get("MIN_READING_SECONDS", "3000"))
 MAX_RUNS_TO_INSPECT = int(os.environ.get("MAX_RUNS_TO_INSPECT", "6"))
+# Manual dispatches get their own budget. Sharing one cap let a handful of manual
+# test runs push the scheduled run that actually banked reading time out of the
+# inspected slice -- the slice takes the newest N, and manual runs are the newest
+# when you are actively testing. That turns a healthy day into a false alarm.
+MAX_MANUAL_TO_INSPECT = int(os.environ.get("MAX_MANUAL_TO_INSPECT", "3"))
 TEST_MODE = os.environ.get("TEST_MODE", "").strip().lower() in ("1", "true", "yes")
 
 
@@ -85,13 +90,23 @@ def inspect():
     log(f"{len(runs)} run(s) in the last {CHECK_WINDOW_HOURS}h "
         f"(schedule + manual)")
 
+    # Cap per source, then merge newest-first. A single shared cap meant manual
+    # dispatches could displace the scheduled run that actually read, because
+    # the cap takes the newest N across both sources.
+    sched = [r for r in runs if r["event"] == "schedule"][:MAX_RUNS_TO_INSPECT]
+    manual = [r for r in runs if r["event"] == "workflow_dispatch"][:MAX_MANUAL_TO_INSPECT]
+    inspect_runs = sorted(sched + manual, key=lambda r: r["created_at"], reverse=True)
+    if len(inspect_runs) < len(runs):
+        log(f"  inspecting {len(inspect_runs)} of {len(runs)} runs "
+            f"({len(sched)} scheduled / {len(manual)} manual)")
+
     counts = {"schedule": 0, "workflow_dispatch": 0}
     by_source = {"schedule": 0, "workflow_dispatch": 0}
     best = 0
     best_run = None
     best_event = None
     latest = None
-    for run in runs[:MAX_RUNS_TO_INSPECT]:
+    for run in inspect_runs:
         event = run["event"]
         if latest is None:
             latest = run
