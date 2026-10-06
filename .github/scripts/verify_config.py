@@ -233,6 +233,14 @@ def main():
                 "watchdog reports the two sources separately",
                 "otherwise the alert cannot tell the user which path delivered",
             )
+            # one shared cap let manual dispatches displace the scheduled run
+            # that actually banked the time, because the cap takes the newest N
+            check(
+                "MAX_MANUAL_TO_INSPECT" in wd_code
+                and "inspect_runs = sorted(sched + manual" in wd_code,
+                "watchdog caps scheduled and manual runs separately",
+                "manual test runs must never push the real reading run out of view",
+            )
 
     # --- schedule shape ---
     print("\n4. schedule and timeout")
@@ -311,6 +319,18 @@ def main():
         "schedule_delay_minutes spans candidate slots across midnight",
         "a run firing 00:00-02:00 UTC was reported ~25h late instead of ~5h",
     )
+    # a manual dispatch banked real reading time on a day with no scheduled run;
+    # bucketing by day before splitting on event made that day vanish entirely
+    check(
+        "runs = sched_runs + manual_runs" in dg_code,
+        "digest buckets days across both scheduled and manual runs",
+        "a day whose reading came from a manual run would drop out of the table",
+    )
+    check(
+        "手动运行" in digest_text and "定时运行平均延迟" in digest_text,
+        "digest separates the two counts and keeps manual out of delay stats",
+        "a manual dispatch has no scheduler delay; averaging it in reported +554 min",
+    )
 
     # --- the failure alert must still be wired ---
     print("\n6. alerting")
@@ -369,6 +389,40 @@ def main():
         wd_text = handle.read()
     check("MIN_READING_SECONDS" in wd_text, "watchdog has a credited-reading threshold")
     check("reading_seconds" in wd_text, "watchdog inspects real credited time, not just run status")
+
+    # --- the assertions must be able to fail, on the runner, not on a laptop ---
+    print("\n9. the invariant checks are themselves regression-tested")
+    selftest = os.path.join(ROOT, ".github/scripts/test_verifier.py")
+    check(
+        os.path.exists(selftest),
+        "test_verifier.py is committed to the repo",
+        "a suite that only runs locally protects nobody; four of its cases exist "
+        "because an assertion here was loose enough to pass a broken state",
+    )
+    verify_wf = os.path.join(ROOT, ".github/workflows/verify.yml")
+    check(os.path.exists(verify_wf), "verify.yml present")
+    if os.path.exists(verify_wf):
+        with open(verify_wf, encoding="utf-8") as handle:
+            vtext = handle.read()
+        check(
+            "test_verifier.py" in vtext,
+            "verify.yml runs the injected-defect self-test",
+            "without this step nothing on the runner guards these assertions",
+        )
+    if os.path.exists(selftest):
+        with open(selftest, encoding="utf-8") as handle:
+            st_text = handle.read()
+        # case A prints without a leading newline, so both forms must match
+        n_cases = len(re.findall(r'^print\("(?:\\n)?case ', st_text, re.M))
+        check(
+            n_cases >= 14,
+            f"self-test covers at least 14 injected defects (found {n_cases})",
+            "the suite must keep growing as invariants are added",
+        )
+        check(
+            "WORKSPACE" in st_text,
+            "self-test works on a staged copy instead of mutating the checkout",
+        )
 
     return finish()
 
