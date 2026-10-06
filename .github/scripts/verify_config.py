@@ -404,10 +404,39 @@ def main():
     if os.path.exists(verify_wf):
         with open(verify_wf, encoding="utf-8") as handle:
             vtext = handle.read()
+        # Parse it. A substring check is satisfied by a step that was indented one
+        # level too deep and silently became part of a `run: |` block -- which is
+        # exactly how the self-test step shipped broken once, with the whole
+        # verifier never running as a step.
+        try:
+            vdoc = yaml.safe_load(vtext)
+            vsteps = [
+                s
+                for job in (vdoc.get("jobs") or {}).values()
+                for s in (job.get("steps") or [])
+            ]
+            parse_note = f"{len(vsteps)} step(s) parsed"
+        except Exception as exc:  # noqa: BLE001
+            vsteps = []
+            parse_note = f"parse failed: {exc}"
+        check(bool(vsteps), "verify.yml parses into real steps", parse_note)
+
+        step_runs = " ".join(str(s.get("run", "")) for s in vsteps)
         check(
-            "test_verifier.py" in vtext,
-            "verify.yml runs the injected-defect self-test",
+            "verify_config.py" in step_runs,
+            "verify.yml runs the invariant checks as a step",
+            "the checker silently became pip arguments and never ran",
+        )
+        check(
+            "test_verifier.py" in step_runs,
+            "verify.yml runs the injected-defect self-test as a step",
             "without this step nothing on the runner guards these assertions",
+        )
+        triggers = vdoc.get("on", vdoc.get(True)) if vsteps else None
+        check(
+            bool(triggers) and "workflow_dispatch" in (triggers or {}),
+            "verify.yml keeps its workflow_dispatch trigger",
+            "losing it makes the checks undispatchable, so a broken main is hard to re-prove",
         )
     if os.path.exists(selftest):
         with open(selftest, encoding="utf-8") as handle:
@@ -415,8 +444,8 @@ def main():
         # case A prints without a leading newline, so both forms must match
         n_cases = len(re.findall(r'^print\("(?:\\n)?case ', st_text, re.M))
         check(
-            n_cases >= 14,
-            f"self-test covers at least 14 injected defects (found {n_cases})",
+            n_cases >= 16,
+            f"self-test covers at least 16 injected defects (found {n_cases})",
             "the suite must keep growing as invariants are added",
         )
         check(

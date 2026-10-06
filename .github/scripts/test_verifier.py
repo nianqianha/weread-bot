@@ -56,11 +56,12 @@ else:
     _stage = None
 
 WF = os.path.join(WORKSPACE, ".github", "workflows", "auto-reading.yml")
+VF = os.path.join(WORKSPACE, ".github", "workflows", "verify.yml")
 DG = os.path.join(WORKSPACE, ".github", "scripts", "weekly_digest.py")
 WD = os.path.join(WORKSPACE, ".github", "scripts", "watchdog.py")
 LC = os.path.join(WORKSPACE, ".github", "scripts", "last_credit.py")
 
-ORIG = {p: open(p, encoding="utf-8").read() for p in (WF, DG, WD, LC)}
+ORIG = {p: open(p, encoding="utf-8").read() for p in (WF, VF, DG, WD, LC)}
 
 AGE_IF_RE = re.compile(
     r'^[ \t]*if \[ "\$hours" -ge "\$MIN_HOURS" \]; then[ \t]*\n', re.M
@@ -232,10 +233,29 @@ if case_needs(ORIG[DG], DIGEST_SPLIT, "N. digest drops manual days"):
     write(DG, ORIG[DG].replace(DIGEST_SPLIT, "runs = sched_runs"))
     run("N. digest drops manual-only days", expect_failure=True)
 
+print("\ncase O: indent a step one level too deep so it becomes pip arguments")
+restore()
+SELF_STEP = "      - name: Prove the invariants can actually fail"
+if case_needs(ORIG[VF], SELF_STEP, "O. self-test step over-indented"):
+    # This is the exact shape that shipped once: the step stopped being a step and
+    # became extra arguments to the previous `run: |` block, so the verifier never
+    # executed and the job failed on pip's exit code instead.
+    write(VF, ORIG[VF].replace(SELF_STEP, "          " + SELF_STEP.strip()))
+    run("O. verify.yml step over-indented", expect_failure=True)
+
+print("\ncase P: drop the workflow_dispatch trigger")
+restore()
+# match the stripped line so CRLF vs LF cannot silently break the anchor
+if case_needs(ORIG[VF], "workflow_dispatch:", "P. dispatch trigger removed"):
+    write(
+        VF,
+        ORIG[VF].replace("  workflow_dispatch:", "  # trigger removed"),
+    )
+    run("P. verify.yml lost workflow_dispatch", expect_failure=True)
+
 restore()
 passed = sum(1 for r in results if r)
 print(f"\n{passed}/{len(results)} verifier cases behaved correctly")
-
 if _stage:
     shutil.rmtree(_stage, ignore_errors=True)
 
