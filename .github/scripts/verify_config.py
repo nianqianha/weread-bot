@@ -269,6 +269,49 @@ def main():
         "apprise>=2 dropped smtp://, so any use of it silently breaks email",
     )
 
+    # --- the digest must report credited time, not the run conclusion ---
+    print("\n5a. the digest must report credited time, not the run conclusion")
+    dg_code = "\n".join(
+        ln for ln in digest_text.splitlines() if not ln.lstrip().startswith("#")
+    )
+    check(
+        "last_credit.credited_seconds(" in dg_code,
+        "digest measures credited time through the shared helper",
+        "three copies of this read existed; the guard and watchdog now share one",
+    )
+    check(
+        "history_seconds" not in dg_code,
+        "digest does not keep a private copy of the artifact read",
+        "a private copy is how the three implementations would drift apart",
+    )
+    # quote-style agnostic: self-test case K injects single quotes, and a
+    # double-quote-only anchor let that pass
+    conclusion_success = re.search(r"""conclusion\s*==\s*["']success["']""", dg_code)
+    check(
+        conclusion_success is None,
+        "digest does not count conclusion==success as a success",
+        "12 of 18 audited runs reported success while reading nothing at all",
+    )
+    check(
+        "跳过（未计入时长）" in digest_text and "每日达标情况" in digest_text,
+        "digest separates skipped runs and prints a per-day table",
+        "a day with zero reading must show up as an explicit zero, not vanish",
+    )
+    check(
+        "距上次真正计入阅读时长" in digest_text
+        and "距上次成功满 20 小时" not in digest_text,
+        "digest describes the 20h rule in terms of credited time",
+        "'last success' is the wrong mental model that caused the guard bug",
+    )
+    # anchored on the both-days expression, not merely the identifier: reducing
+    # it to (0,) leaves the name in place and silently reintroduces the ~25h
+    # delay (self-test case L)
+    check(
+        "for days_back in (1, 0):" in dg_code,
+        "schedule_delay_minutes spans candidate slots across midnight",
+        "a run firing 00:00-02:00 UTC was reported ~25h late instead of ~5h",
+    )
+
     # --- the failure alert must still be wired ---
     print("\n6. alerting")
     check("Notify by email on failure" in rsteps, "failure email step exists")
