@@ -106,24 +106,34 @@ def schedule_delay_minutes(created_at):
 
 
 def timing_lines(rows):
-    """rows: (beijing_dt, delay_minutes, credited_seconds) for runs that read.
+    """rows: (beijing_dt, delay_minutes | None, credited_seconds, event).
 
     Only runs that actually banked time are listed. A guard-skip fires on the
     same schedule but contributes nothing, so mixing it in made the average
     describe "when did the workflow start" instead of "when did reading happen".
+    delay is None for manual dispatches, which have no scheduler delay.
     """
     if not rows:
         return ["", "触发时间：本周没有任何一次运行真正计入时长。"]
     rows = sorted(rows)
-    out = ["", "触发时间（北京时间 / 相对计划延迟，仅统计真正计入时长的运行）："]
-    for when, delay, secs in rows:
-        out.append(f"  {when:%m-%d %H:%M}  +{delay} 分钟   计入 {humanize(secs)}")
-    delays = [d for _, d, _ in rows]
-    avg = int(round(sum(delays) / len(delays)))
-    worst = max(delays)
-    out.append(f"平均延迟 {avg} 分钟，最大 {worst} 分钟")
-    if any(d >= 12 * 60 for d in delays):
-        out.append("注意：有运行延迟超过 12 小时，可能跨过午夜导致时长记到次日。")
+    out = ["", "触发时间（北京时间；延迟仅适用于定时运行）："]
+    for when, delay, secs, event in rows:
+        when_part = f"{when:%m-%d %H:%M}"
+        if delay is None:
+            out.append(f"  {when_part}  手动触发      计入 {humanize(secs)}")
+        else:
+            out.append(
+                f"  {when_part}  +{delay} 分钟     计入 {humanize(secs)}"
+            )
+    # only scheduled runs carry a delay, so only they may be averaged
+    delays = [d for _, d, _, e in rows if d is not None]
+    if delays:
+        avg = int(round(sum(delays) / len(delays)))
+        worst = max(delays)
+        out.append(f"定时运行平均延迟 {avg} 分钟，最大 {worst} 分钟"
+                   f"（共 {len(delays)} 次；手动触发不计入延迟统计）")
+        if any(d >= 12 * 60 for d in delays):
+            out.append("注意：有定时运行延迟超过 12 小时，可能跨过午夜导致时长记到次日。")
     return out
 
 
@@ -164,14 +174,20 @@ def build_report():
     )
     runs = json.loads(raw.decode("utf-8")).get("workflow_runs", [])
 
-    # only count the scheduled slots, not manual smoke tests
-    runs = [r for r in runs if r.get("event") == "schedule"]
+    # Scheduled slots and manual dispatches both bank real reading time, so both
+    # feed the totals and the per-day table. Bucketing by day BEFORE this split
+    # meant a day whose reading came from a manual run produced no bucket at all
+    # and vanished from the table -- the same silent-drop failure this digest was
+    # just fixed for. The counts stay split so each label remains truthful.
+    sched_runs = [r for r in runs if r.get("event") == "schedule"]
+    manual_runs = [r for r in runs if r.get("event") == "workflow_dispatch"]
+    runs = sched_runs + manual_runs
 
     total_seconds = 0
-    read_runs = []          # (beijing_dt, delay_minutes, credited_seconds)
+    read_runs = []          # (beijing_dt, delay_minutes, credited_seconds, event)
     skipped = []            # succeeded but banked nothing -- the guard let it go
     failed_rows = []
-    day_runs = {}           # Beijing date -> how many scheduled runs it had
+    day_runs = {}           # Beijing date -> how many runs it had
     day_totals = {}         # Beijing date -> credited seconds
 
     for run in runs:
@@ -188,7 +204,7 @@ def build_report():
         # this digest used to count those as successes -- 12 of 18 runs in the
         # audited week read nothing at all while the email said "18 successful".
         seconds = last_credit.credited_seconds(run["id"])
-        log(f"run {run['id']} credited={seconds}s")
+        log(f"run {run['id']} event={run['event']} credited={seconds}s")
 
         fired = None
         if created:
@@ -204,7 +220,15 @@ def build_report():
         total_seconds += seconds
         if fired is not None:
             day_totals[fired.date()] = day_totals.get(fired.date(), 0) + seconds
-            read_runs.append((fired, schedule_delay_minutes(created), seconds))
+            # A manual dispatch has no scheduler delay; measuring it against the
+            # nearest cron slot produced a meaningless +554 min and dragged the
+            # average from 30 min to 105 min.
+            delay = (
+                schedule_delay_minutes(created)
+                if run["event"] == "schedule"
+                else None
+            )
+            read_runs.append((fired, delay, seconds, run["event"]))
 
     end = datetime.datetime.now().astimezone()
     start = (end - datetime.timedelta(days=DAYS)).astimezone()
@@ -218,12 +242,12 @@ def build_report():
     lines = [
         f"微信读书周报（{start:%Y-%m-%d} ~ {end:%Y-%m-%d}）",
         "",
-        f"定时任务执行：{len(runs)} 次",
+        f"定时任务执行：{len(sched_runs)} 次    手动运行：{len(manual_runs)} 次",
         f"  真正计入时长：{len(read_runs)} 次",
         f"  跳过（未计入时长）：{len(skipped)} 次",
         f"  运行失败：{len(failed_rows)} 次",
         "",
-        f"累计阅读时长：{humanize(total_seconds)}",
+        f"累计阅读时长：{humanize(total_seconds)}（定时与手动都计入）",
         f"目标：每天 {TARGET_MINUTES} 分钟 × {DAYS} 天 = {humanize(target_total)}",
         gap_line,
         "",
@@ -245,7 +269,8 @@ def build_report():
         lines += ["", "失败详情见 Actions 页面该次运行记录。"]
     return (
         "\n".join(lines),
-        len(runs),
+        len(sched_runs),
+        len(manual_runs),
         len(read_runs),
         len(skipped),
         len(failed_rows),
@@ -297,7 +322,7 @@ def main():
         return code
 
     try:
-        report, total, read_count, skipped, failed, seconds = build_report()
+        report, sched, manual, read_count, skipped, failed, seconds = build_report()
     except Exception as exc:  # noqa: BLE001
         log(f"could not build the report: {type(exc).__name__}: {exc}")
         return 1
@@ -305,13 +330,14 @@ def main():
     print("----- digest preview -----")
     print(report)
     print("--------------------------")
-    log(f"runs={total} read={read_count} skipped={skipped} failed={failed} seconds={seconds}")
+    log(f"sched={sched} manual={manual} read={read_count} skipped={skipped} "
+        f"failed={failed} seconds={seconds}")
 
     # Only skip when there was nothing to report at all. A window with runs but
     # zero credited time is exactly the case the reader needs told about, so it
     # must still send.
-    if total == 0:
-        log("no scheduled runs in the window, skipping email")
+    if sched + manual == 0:
+        log("no runs in the window, skipping email")
         return 0
 
     if not os.environ.get("MAIL_CONFIG", "").strip():
