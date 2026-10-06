@@ -28,7 +28,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install "PyYAML>=6.0"
 
-      - name: Assert the Actions wiring invariants
-        env:
-          TARGET_MINUTES: '90'
-        run: python .github/scripts/verify_config.py
+        - name: Assert the Actions wiring invariants
+          env:
+            TARGET_MINUTES: '90'
+          run: python .github/scripts/verify_config.py
+
+        # A check that has never been shown to fail is not a check. This injects
+        # one real defect per case and asserts the verifier objects; four of
+        # these cases exist because an assertion was written loosely enough to
+        # pass a broken state. Runs on a staged copy, never the checkout.
+        - name: Prove the invariants can actually fail
+          env:
+            TARGET_MINUTES: '90'
+          run: python .github/scripts/test_verifier.py
