@@ -54,6 +54,11 @@ on:
         required: false
         default: '50'
         type: string
+      force_fail_for_alert_test:
+        description: '仅用于验证失败告警：让阅读步骤立刻失败，触发失败邮件。定时任务不会传任何输入，故此开关只可能来自手动触发'
+        required: false
+        default: 'false'
+        type: string
 
 jobs:
   auto-reading:
@@ -252,9 +257,16 @@ jobs:
         HISTORY_FILE: ${{ secrets.HISTORY_FILE || 'logs/run-history.json' }}
         HISTORY_MAX_ENTRIES: ${{ secrets.HISTORY_MAX_ENTRIES || github.event.inputs.history_max_entries || '50' }}
         HISTORY_PERSIST_RUNTIME_ERROR: ${{ secrets.HISTORY_PERSIST_RUNTIME_ERROR || 'true' }}
+        # 测试专用：只有手动触发才可能为 true（定时触发不传任何输入），
+        # 用来实证「运行失败 → 失败告警邮件」这条链路确实会触发。
+        FORCE_FAIL: ${{ github.event.inputs.force_fail_for_alert_test == 'true' }}
         # 其他环境变量
         TZ: 'Asia/Shanghai'
       run: |
+        if [ "$FORCE_FAIL" = "true" ]; then
+          echo "FORCE_FAIL 已设置：故意失败，用于验证失败告警邮件链路。"
+          exit 1
+        fi
         echo "开始自动阅读任务..."
         echo "当前时间: $(date)"
         echo "运行参数:"
