@@ -297,11 +297,28 @@ A: 不建议同时运行多个相同账户的 Action，可能导致账户异常�
 
 ### Q: GitHub Actions 有使用限制吗？
 
-A: 是的，GitHub 免费账户每月有 2000 分钟的 Actions 使用时间。本项目单次运行通常消耗 60-120 分钟。
+A: 对**公开仓库**而言，使用 GitHub 附赠的 Actions 额度是免费的，不占用那 2000 分钟的私有仓库额度；本项目 fork 出来的公开仓库通常不构成分钟数压力。
+
+真正会让人措手不及的是**账单里的预算上限**：在 Settings → Billing and licensing → Budgets and alerts 里，如果 Actions 的预算被设为 `0`，并勾选了 **Stop usage**，那么 Actions 会在**整个账号层面**被禁用，仓库里的 workflow 连手动触发都会被拒（报错 `Actions has been disabled for this repository`）。这和分钟数无关，删除该预算或取消勾选即可恢复；恢复前需要先添加付款方式。
+
+怎么区分这两种情况：
+
+- 在仓库 Settings → Actions 里看到启用开关是打开的，**不代表可用** —— 禁用发生在账号层面，仓库级接口仍然会返回 `enabled: true`；
+- 最可靠的判断是手动触发一次 workflow：能排队就是可用，被拒就是被账单挡住了。
 
 ### Q: 如何设置定时运行？
 
 A: 先取消 `.github/workflows/auto-reading.yml` 中 `schedule` 部分的注释，并根据需要调整 cron 表达式。注意时间为 UTC 时间。如果你 fork 后不想继续改代码，但想调整默认阅读时长，可以额外配置仓库 Secret `TARGET_DURATION`，例如 `5-10`。
+
+三个槽位的时间不是随便填的，同样的数字在仓库里出现了三份：
+
+- `.github/workflows/auto-reading.yml` 中 `schedule` 的 cron；
+- `.github/scripts/weekly_digest.py` 的 `SLOT_HOURS_UTC`（用于延迟报告）；
+- `.github/scripts/derive_window.py` 的 `DEFAULT_SLOT_HOURS_UTC`（用于推导看门狗窗口）。
+
+`verify_config.py` 会在每次推送时校验**前两份**是否一致，但目前**不检查第三份**。也就是说只改 `derive_window.py` 而不同步 cron，`CHECK_WINDOW_HOURS` 的推导会悄悄失准而构建仍然通过 —— 修改槽位时请三处一起改。
+
+另外 `derive_window.py` 的槽位间距决定了看门狗 `CHECK_WINDOW_HOURS` 的取值，改动槽位后需要重新运行该脚本确认推导结果。
 
 ### Q: GitHub Actions 里的执行历史保存在哪里？
 
