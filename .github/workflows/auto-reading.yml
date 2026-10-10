@@ -1,21 +1,31 @@
 name: Auto Reading Bot
 
 on:
-  # Three slots a day, but only the first one that is actually due reads:
-  # the "Decide whether this slot should read" step skips the rest until 20
-  # hours have passed since the last successful scheduled run.
+  # --- schedule DISABLED (2026-10-10) --------------------------------------
+  # Reading now runs on a VPS, which is unaffected by any GitHub outage. This
+  # workflow is dispatch-only until you ask for the GitHub path back, so that
+  # re-enabling Actions cannot silently start a second 90-minute session a day.
   #
-  # The odd minutes are deliberate. Observed GitHub scheduler delay over
-  # 09-28..10-01 was 6h14m on the morning slot and 5h20m on the evening one,
-  # so ~5h47m on average. The cron values are the desired fire time minus that
-  # average, which should put the runs at roughly 10:00 / 16:00 / 22:00 Beijing.
-  # Re-measure from the weekly digest email ("average delay") and nudge these
-  # if it drifts. GitHub cron is always UTC.
-  schedule:
-    - cron: '13 2 * * *'   # UTC 02:13 -> ~10:00 Beijing
-    - cron: '13 8 * * *'   # UTC 08:13 -> ~16:00 Beijing
-    - cron: '13 20 * * *'  # UTC 20:13 -> ~22:00 Beijing
-  
+  # The slot geometry is preserved rather than deleted, because three things
+  # still depend on it and must not be allowed to drift apart silently:
+  #   - weekly_digest.py   SLOT_HOURS_UTC            (delay report)
+  #   - derive_window.py   DEFAULT_SLOT_HOURS_UTC    (CHECK_WINDOW_HOURS)
+  #   - verify_config.py, which fails the build if those disagree with these
+  # To re-enable: drop the leading "#" from the `schedule:` line and from each
+  # of the three cron lines. Nothing else needs to change.
+  #
+  # Why these minutes: three slots a day, but only the first one that is due
+  # actually reads -- the "Decide whether this slot should read" step skips the
+  # rest until 20 hours have passed since the last successful scheduled run.
+  # The odd minutes cancel the observed GitHub scheduler delay (6h14m and 5h20m
+  # measured over 09-28..10-01, ~5h47m average), which puts the runs near
+  # 10:00 / 16:00 / 22:00 Beijing. Re-measure from the weekly digest's
+  # "average delay" line. GitHub cron is always UTC.
+  #   schedule:
+  #     - cron: '13 2 * * *'   # UTC 02:13 -> ~10:00 Beijing
+  #     - cron: '13 8 * * *'   # UTC 08:13 -> ~16:00 Beijing
+  #     - cron: '13 20 * * *'  # UTC 20:13 -> ~22:00 Beijing
+  # ---------------------------------------------------------------------------
 
   # 手动触发
   workflow_dispatch:

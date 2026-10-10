@@ -243,11 +243,41 @@ def main():
             )
 
     # --- schedule shape ---
-    print("\n4. schedule and timeout")
-    crons = [s["cron"] for s in triggers["schedule"]]
-    check(len(crons) == 3, f"exactly 3 daily slots, found {len(crons)}: {crons}")
-    hours = sorted(int(c.split()[1]) for c in crons)
-    check(len(set(hours)) == len(hours), "slot hours are distinct", str(hours))
+    # The GitHub schedule is deliberately paused: reading moved to a VPS. The cron
+    # values survive as commented lines so the geometry stays verifiable and
+    # re-enabling cannot silently drift away from SLOT_HOURS_UTC. The assertion
+    # that matters most is the first one: "paused" has to be a structural fact,
+    # not a claim in a comment, because a live cron would read a second 90
+    # minutes a day the moment the account-level Actions block is lifted.
+    print("\n4. schedule is paused, and its geometry is still pinned")
+    check(
+        "schedule" not in (triggers or {}),
+        "auto-reading.yml has no live schedule trigger",
+        "reading runs on a VPS; a live cron would read a second 90 minutes a day",
+    )
+    check(
+        "workflow_dispatch" in (triggers or {}),
+        "auto-reading.yml keeps workflow_dispatch",
+        "a paused schedule must still leave the workflow runnable on demand",
+    )
+    with open(READING, encoding="utf-8") as handle:
+        reading_text = handle.read()
+    crons = re.findall(r"^\s*#\s*-\s*cron:\s*'([^']+)'", reading_text, re.M)
+    check(
+        len(crons) == 3,
+        f"exactly 3 daily slots preserved as comments, found {len(crons)}: {crons}",
+    )
+    hours = []
+    for c in crons:
+        parts = c.split()
+        if len(parts) == 5:
+            hours.append(int(parts[1]))
+    hours = sorted(hours)
+    check(
+        len(hours) == 3 and len(set(hours)) == len(hours),
+        "slot hours are distinct",
+        str(hours),
+    )
     for c in crons:
         parts = c.split()
         check(len(parts) == 5, f"cron {c!r} has 5 fields")
@@ -258,7 +288,7 @@ def main():
     )
 
     # --- cross-file coupling that silently drifts ---
-    print("\n5. digest slot list must match the workflow cron hours")
+    print("\n5. digest slot list must match the preserved slot hours")
     digest_text = open(DIGEST_PY, encoding="utf-8").read()
     match = re.search(r"SLOT_HOURS_UTC\s*=\s*\(([^)]*)\)", digest_text)
     check(bool(match), "SLOT_HOURS_UTC declared in weekly_digest.py")
@@ -266,8 +296,9 @@ def main():
         declared = sorted(int(x) for x in re.findall(r"\d+", match.group(1)))
         check(
             declared == hours,
-            f"weekly_digest SLOT_HOURS_UTC {declared} == workflow cron hours {hours}",
-            "the delay report would be computed against the wrong slots",
+            f"weekly_digest SLOT_HOURS_UTC {declared} == preserved slot hours {hours}",
+            "the delay report would be computed against the wrong slots, and "
+            "re-enabling the schedule would then fire at times nobody verified",
         )
     check("send_mail" in digest_text, "digest uses send_mail (no apprise dependency)")
     apprise_used = re.search(r"^\s*import\s+apprise\b|apprise\.Apprise\(", digest_text, re.M)
@@ -347,6 +378,21 @@ def main():
     if os.path.exists(wd_wf_path):
         with open(wd_wf_path, encoding="utf-8") as handle:
             wd_doc = yaml.safe_load(handle)
+        # The watchdog's schedule is paused too, and for a sharper reason than the
+        # reader's: it answers "did reading time accumulate?" from GitHub's own run
+        # history. Reading now happens off-platform, so a live hourly trigger would
+        # find nothing every single time and email a false alarm 24 times a day.
+        wd_triggers = wd_doc.get(True) or wd_doc.get("on") or {}
+        check(
+            "schedule" not in wd_triggers,
+            "watchdog.yml has no live schedule trigger",
+            "it would email a false 'no reading' alert every hour while the VPS reads",
+        )
+        check(
+            "workflow_dispatch" in wd_triggers,
+            "watchdog.yml keeps workflow_dispatch",
+            "a paused schedule must still leave it runnable on demand",
+        )
         wd_steps = {
             s.get("name"): s for s in wd_doc["jobs"]["watchdog"]["steps"] if s.get("name")
         }
@@ -444,8 +490,8 @@ def main():
         # case A prints without a leading newline, so both forms must match
         n_cases = len(re.findall(r'^print\("(?:\\n)?case ', st_text, re.M))
         check(
-            n_cases >= 16,
-            f"self-test covers at least 16 injected defects (found {n_cases})",
+            n_cases >= 18,
+            f"self-test covers at least 18 injected defects (found {n_cases})",
             "the suite must keep growing as invariants are added",
         )
         check(

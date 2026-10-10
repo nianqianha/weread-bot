@@ -56,12 +56,53 @@ else:
     _stage = None
 
 WF = os.path.join(WORKSPACE, ".github", "workflows", "auto-reading.yml")
+WDF = os.path.join(WORKSPACE, ".github", "workflows", "watchdog.yml")
 VF = os.path.join(WORKSPACE, ".github", "workflows", "verify.yml")
 DG = os.path.join(WORKSPACE, ".github", "scripts", "weekly_digest.py")
 WD = os.path.join(WORKSPACE, ".github", "scripts", "watchdog.py")
 LC = os.path.join(WORKSPACE, ".github", "scripts", "last_credit.py")
 
-ORIG = {p: open(p, encoding="utf-8").read() for p in (WF, VF, DG, WD, LC)}
+ORIG = {p: open(p, encoding="utf-8").read() for p in (WF, WDF, VF, DG, WD, LC)}
+
+# The paused schedule block, and the same block as live YAML. Written out in full
+# rather than produced by stripping '#' from each line: the commented block and the
+# live block do not share indentation (the comment adds padding that has to be
+# dropped, not merely removed), and a clever rewrite is exactly the kind of thing
+# that silently stops injecting the defect it claims to inject.
+PAUSED_BLOCK = re.compile(
+    r"^  \#\s+schedule:\r?\n"
+    r"(?:  \#\s+- cron: '[^']+'[^\r\n]*\r?\n){3}",
+    re.M,
+)
+LIVE_BLOCK = (
+    "  schedule:\n"
+    "    - cron: '13 2 * * *'   # UTC 02:13 -> ~10:00 Beijing\n"
+    "    - cron: '13 8 * * *'   # UTC 08:13 -> ~16:00 Beijing\n"
+    "    - cron: '13 20 * * *'  # UTC 20:13 -> ~22:00 Beijing\n"
+)
+PAUSED_HOURLY = re.compile(
+    r"^  \#\s+schedule:\r?\n  \#\s+- cron: '17 \* \* \* \*'[^\r\n]*\r?\n",
+    re.M,
+)
+LIVE_HOURLY = (
+    "  schedule:\n"
+    "    - cron: '17 * * * *'   # hourly, off the hour to dodge the scheduling crowd\n"
+)
+
+
+def revive_schedule(path, pattern, live_text, label):
+    """Turn a paused schedule block back into a live one, or report BROKEN."""
+    text = ORIG[path]
+    m = pattern.search(text)
+    if not m:
+        results.append(False)
+        print(f"  BROKEN  {label}: paused schedule block not found (regex missed)")
+        return False
+    nl = "\r\n" if "\r\n" in m.group(0) else "\n"
+    if nl != "\n":
+        live_text = live_text.replace("\n", nl)
+    write(path, text[: m.start()] + live_text + text[m.end():])
+    return True
 
 AGE_IF_RE = re.compile(
     r'^[ \t]*if \[ "\$hours" -ge "\$MIN_HOURS" \]; then[ \t]*\n', re.M
@@ -252,6 +293,19 @@ if case_needs(ORIG[VF], "workflow_dispatch:", "P. dispatch trigger removed"):
         ORIG[VF].replace("  workflow_dispatch:", "  # trigger removed"),
     )
     run("P. verify.yml lost workflow_dispatch", expect_failure=True)
+
+print("\ncase Q: revive the paused reader schedule by hand")
+restore()
+# The exact mistake this whole change guards against: someone uncomments the cron
+# block to "test" it, or a merge restores it, and the build stays green while the
+# VPS reads a second 90 minutes a day. The pause has to be enforced, not documented.
+if revive_schedule(WF, PAUSED_BLOCK, LIVE_BLOCK, "Q. reader schedule paused"):
+    run("Q. live cron restored on auto-reading.yml", expect_failure=True)
+
+print("\ncase R: revive the paused watchdog schedule")
+restore()
+if revive_schedule(WDF, PAUSED_HOURLY, LIVE_HOURLY, "R. watchdog schedule paused"):
+    run("R. live hourly cron restored on watchdog.yml", expect_failure=True)
 
 restore()
 passed = sum(1 for r in results if r)

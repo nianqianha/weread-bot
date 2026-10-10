@@ -3,9 +3,23 @@ name: Reading Watchdog
 # Independent of the reading workflow on purpose: separate file, separate job,
 # separate schedule. A bug in auto-reading.yml must not be able to silence this.
 on:
-  # hourly, off the hour to avoid the top-of-hour scheduling crowd
-  schedule:
-    - cron: '17 * * * *'
+  # --- schedule DISABLED (2026-10-10) --------------------------------------
+  # Reading moved to a VPS, so "has reading time accumulated?" can no longer be
+  # answered from GitHub's own run history: the runs that now count happen off
+  # this platform entirely. Left enabled, this would fire hourly and email a
+  # false "no reading" alert every single time.
+  #
+  # It is also the wrong tool while the reader is server-side -- the server has
+  # its own exit-code wrapper that emails on failure, which is strictly more
+  # accurate than inferring failure from absence.
+  #
+  # To re-enable: drop the leading "#" from the `schedule:` line and from the
+  # cron line, and re-point the check at wherever reading will be running by then.
+  # CHECK_WINDOW_HOURS is asserted against derive_window.py by verify_config.py,
+  # so keep them consistent if you edit either.
+  #   schedule:
+  #     - cron: '17 * * * *'   # hourly, off the hour to dodge the scheduling crowd
+  # ---------------------------------------------------------------------------
   workflow_dispatch:
     inputs:
       test_mode:
